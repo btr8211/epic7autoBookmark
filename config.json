@@ -1,4 +1,6 @@
 {
     "adb_addr": "127.0.0.1:5555",
-    "e7_language": "zh-TW"
+    "e7_language": "zh-TW",
+    "default_gold": 0,
+    "default_skystone": 0
 }

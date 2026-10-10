@@ -20,7 +20,8 @@ ii. 推薦：只勾高級設定
 4. config.json  
 ![預覽](https://i.imgur.com/2sAobaw.png)  
 i. adb_addr填adb路徑  
-ii. e7_language填e7裡的語系(繁中: zh-TW, 簡中: zh-CN, 英文: en-US)
+ii. e7_language填e7裡的語系(繁中: zh-TW, 簡中: zh-CN, 英文: en-US)  
+iii. default_gold / default_skystone為啟動時預設填入的金幣與天空石數量(可不改，啟動後也能在介面手動修改)
   
 ## 二、使用方式
 先將bluestack和第七史詩的設定調整的如上方環境相同。  
@@ -42,4 +43,4 @@ adb功能在設定=>進階=>Android調試橋(ADB)，勾選後會看到路徑。
 5. .exe是用pyinstaller包的，有安全疑慮的話可以自己打包 `pyinstaller -F -w -i main.ico main.py`。
 
 ## 三、特別感謝
-Raven9527 - 自動點擊派遣功能
+Raven9527 - 自動點擊派遣功能(遊戲已移除派遣，該功能已拿掉)
