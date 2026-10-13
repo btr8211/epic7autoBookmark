@@ -44,6 +44,10 @@ class worker(QtCore.QThread):
     expectNum = 0
     moneyNum = 0
     stoneNum = 0
+    refreshTime = 0
+    covenantFoundTime = 0
+    mysticFoundTime = 0
+    inShop = False
 
     isStart = QtCore.pyqtSignal()
     isProgress = QtCore.pyqtSignal(str)
@@ -62,6 +66,21 @@ class worker(QtCore.QThread):
         self.expectNum = expectNum
         self.moneyNum = moneyNum
         self.stoneNum = stoneNum
+
+    def summaryLines(self):
+        return [
+            "===== 結算 =====",
+            "共花費:",
+            f"天空石: {self.refreshTime*REFRESH_STONE_COST}個",
+            f"金幣: {self.covenantFoundTime*COVENANT_PRICE+self.mysticFoundTime*MYSTIC_PRICE}元",
+            "獲得書籤:",
+            f"聖約: {self.covenantFoundTime}次",
+            f"神秘: {self.mysticFoundTime}次",
+        ]
+
+    def _emitSummary(self):
+        for line in self.summaryLines():
+            self.emitLog.emit(line)
 
     def _sleep(self, seconds: int = 1):
         if self.isInterruptionRequested():
@@ -106,6 +125,11 @@ class worker(QtCore.QThread):
     def run(self):
         self.isStart.emit()
 
+        self.refreshTime = 0
+        self.covenantFoundTime = 0
+        self.mysticFoundTime = 0
+        self.inShop = False
+
         print("startMode: ", self.startMode)
         print("expectedNum: ", self.expectNum)
 
@@ -147,10 +171,6 @@ class worker(QtCore.QThread):
 
             self._sleep()
 
-            refreshTime = 0
-            covenantFoundTime = 0
-            mysticFoundTime = 0
-
             buyButton = aircv.imread(f"./img/buyButton-{e7_language}.png")
             refreshButton = aircv.imread(f"./img/refreshButton-{e7_language}.png")
             refreshYesButton = aircv.imread(f"./img/refreshYesButton-{e7_language}.png")
@@ -162,6 +182,7 @@ class worker(QtCore.QThread):
             )
             bookmarkFound = {1: False, 2: False}
             needRefresh = False
+            self.inShop = True
 
             while (
                 self.expectNum > 0
@@ -190,9 +211,9 @@ class worker(QtCore.QThread):
 
                     self.moneyNum -= price
                     if mode == 1:
-                        covenantFoundTime += 1
+                        self.covenantFoundTime += 1
                     else:
-                        mysticFoundTime += 1
+                        self.mysticFoundTime += 1
                     self.emitMoney.emit(str(self.moneyNum))
 
                 if not needRefresh:
@@ -219,7 +240,7 @@ class worker(QtCore.QThread):
                 self.stoneNum -= REFRESH_STONE_COST
                 self.emitStone.emit(str(self.stoneNum))
 
-                refreshTime += 1
+                self.refreshTime += 1
 
                 if self.startMode == 3:
                     self.expectNum -= REFRESH_STONE_COST
@@ -231,20 +252,13 @@ class worker(QtCore.QThread):
                 self._sleep()
 
             # finished report
-            self.emitLog.emit("===== 結算 =====")
-            self.emitLog.emit("共花費:")
-            self.emitLog.emit(f"天空石: {refreshTime*REFRESH_STONE_COST}個")
-            self.emitLog.emit(
-                f"金幣: {covenantFoundTime*COVENANT_PRICE+mysticFoundTime*MYSTIC_PRICE}元"
-            )
-            self.emitLog.emit("獲得書籤:")
-            self.emitLog.emit(f"聖約: {covenantFoundTime}次")
-            self.emitLog.emit(f"神秘: {mysticFoundTime}次")
+            self._emitSummary()
 
             self.isFinish.emit()
 
         except StopRequested:
-            pass
+            if self.inShop:
+                self._emitSummary()
 
         except Exception as e:
             print(e)
@@ -568,8 +582,14 @@ class Ui_Main(object):
             self.worker.start()
         else:
             self.worker.requestInterruption()
-            if not self.worker.wait(3000):
+            if self.worker.wait(3000):
+                # 讓 worker 送出的結算日誌先顯示,再接「停止」
+                QtCore.QCoreApplication.processEvents()
+            else:
                 self.worker.terminate()
+                if self.worker.inShop:
+                    for line in self.worker.summaryLines():
+                        self.logTextBrowser.append(line)
             self.logTextBrowser.append("===== 停止 =====")
             self.startProperty(False)
 
