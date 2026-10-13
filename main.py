@@ -11,7 +11,6 @@ from adbutils import adb, AdbDevice
 from numpy import asarray
 import aircv
 import json
-import random
 
 with open("config.json", "r", encoding="utf-8") as file:
     config = json.load(file)
@@ -24,10 +23,15 @@ default_mystic_count = int(config.get("default_mystic_count", 0))
 default_stone_count = int(config.get("default_stone_count", 0))
 
 
-def pointOffset(point):
-    x = int(random.uniform(point.x - 2, point.x + 2))
-    y = int(random.uniform(point.y - 2, point.y + 2))
-    return (x, y)
+COVENANT_PRICE = 184000
+MYSTIC_PRICE = 280000
+REFRESH_STONE_COST = 3
+MATCH_THRESHOLD = 0.9
+MAX_RETRY = 10  # 每個「點擊後等待畫面變化」動作的重試上限
+
+
+class StopRequested(Exception):
+    """使用者按下停止時,由 worker._sleep 拋出以跳出所有迴圈"""
 
 
 def doubleClick(device: AdbDevice, x: int, y: int):
@@ -59,6 +63,46 @@ class worker(QtCore.QThread):
         self.moneyNum = moneyNum
         self.stoneNum = stoneNum
 
+    def _sleep(self, seconds: int = 1):
+        if self.isInterruptionRequested():
+            raise StopRequested()
+        QtCore.QThread.sleep(seconds)
+        if self.isInterruptionRequested():
+            raise StopRequested()
+
+    def _find(self, screenshot, template, rgb: bool = False):
+        return aircv.find_template(screenshot, template, MATCH_THRESHOLD, rgb)
+
+    def _clickUntilGone(self, device, position, template, what: str, rgb: bool = False):
+        """反覆點擊 position,直到畫面上的 template 消失;超過重試上限就報錯"""
+        for _ in range(MAX_RETRY):
+            doubleClick(device, position[0], position[1])
+            self._sleep()
+
+            if not self._find(asarray(device.screenshot()), template, rgb):
+                return
+
+            self._sleep()
+
+        raise RuntimeError(f"{what}: 點擊{MAX_RETRY}次後按鈕仍未消失")
+
+    def _clickThenConfirm(self, device, position, confirmTemplate, what: str, rgb: bool = False):
+        """點擊 position 開啟確認視窗,再點確認按鈕直到它消失;兩步都有重試上限"""
+        for _ in range(MAX_RETRY):
+            doubleClick(device, position[0], position[1])
+            self._sleep()
+
+            confirmLocation = self._find(asarray(device.screenshot()), confirmTemplate)
+            if confirmLocation:
+                self._clickUntilGone(
+                    device, confirmLocation["result"], confirmTemplate, what, rgb
+                )
+                return
+
+            self._sleep()
+
+        raise RuntimeError(f"{what}: 點擊{MAX_RETRY}次後未出現確認按鈕")
+
     def run(self):
         self.isStart.emit()
 
@@ -68,14 +112,14 @@ class worker(QtCore.QThread):
         try:
             self.emitLog.emit("===== 初始化 =====")
 
-            QtCore.QThread.sleep(1)
+            self._sleep()
 
             # check input
-            if self.moneyNum < 280000:
+            if self.moneyNum < MYSTIC_PRICE:
                 self.emitLog.emit("錯誤: 金幣不足28萬")
                 raise ValueError("out of money")
 
-            if self.stoneNum < 3:
+            if self.stoneNum < REFRESH_STONE_COST:
                 self.emitLog.emit("錯誤: 天空石不足以刷新商店")
                 raise ValueError("out of stone")
 
@@ -85,7 +129,7 @@ class worker(QtCore.QThread):
 
             self.emitLog.emit("正在嘗試連接模擬器......")
 
-            QtCore.QThread.sleep(1)
+            self._sleep()
 
             adb.connect(adb_addr, timeout=10)
 
@@ -93,237 +137,118 @@ class worker(QtCore.QThread):
 
             self.emitLog.emit("adb連接成功")
 
-            QtCore.QThread.sleep(1)
+            self._sleep()
 
             self.emitLog.emit("初始化完成")
 
-            QtCore.QThread.sleep(1)
+            self._sleep()
 
             self.emitLog.emit("===== 刷商店 =====")
 
-            QtCore.QThread.sleep(1)
+            self._sleep()
 
             refreshTime = 0
             covenantFoundTime = 0
             mysticFoundTime = 0
 
-            covenant = aircv.imread("./img/covenantLocation.png")
-            mystic = aircv.imread("./img/mysticLocation.png")
             buyButton = aircv.imread(f"./img/buyButton-{e7_language}.png")
             refreshButton = aircv.imread(f"./img/refreshButton-{e7_language}.png")
             refreshYesButton = aircv.imread(f"./img/refreshYesButton-{e7_language}.png")
-            
-            needRefresh = False
-            covenantFound = False
-            mysticFound = False
 
-            while self.expectNum > 0 and self.moneyNum > 280000 and self.stoneNum >= 3:
+            # (startMode, 名稱, 商品圖, 價格)
+            bookmarks = (
+                (1, "聖約", aircv.imread("./img/covenantLocation.png"), COVENANT_PRICE),
+                (2, "神秘", aircv.imread("./img/mysticLocation.png"), MYSTIC_PRICE),
+            )
+            bookmarkFound = {1: False, 2: False}
+            needRefresh = False
+
+            while (
+                self.expectNum > 0
+                and self.moneyNum >= MYSTIC_PRICE
+                and self.stoneNum >= REFRESH_STONE_COST
+            ):
                 screenshot = asarray(device.screenshot())
 
-                covenantLocation = aircv.find_template(screenshot, covenant, 0.9)
-                if covenantLocation and (not covenantFound):
-                    covenantFound = True
+                for mode, name, template, price in bookmarks:
+                    location = self._find(screenshot, template)
+                    if not location or bookmarkFound[mode]:
+                        continue
 
-                    print("find covenant!")
-                    self.emitLog.emit("找到聖約書籤")
+                    bookmarkFound[mode] = True
+                    self.emitLog.emit(f"找到{name}書籤")
 
-                    while True:
-                        covenantFoundResult: tuple = covenantLocation["result"]
-                        doubleClick(
-                            device,
-                            covenantFoundResult[0] + 800,
-                            covenantFoundResult[1] + 40,
-                        )
-
-                        QtCore.QThread.sleep(1)
-
-                        buy_screenshot = asarray(device.screenshot())
-                        buyButtonLocation = aircv.find_template(
-                            buy_screenshot, buyButton, 0.9
-                        )
-
-                        if buyButtonLocation:
-                            buyButtonFoundResult: tuple = buyButtonLocation["result"]
-
-                            while True:
-                                doubleClick(
-                                    device,
-                                    buyButtonFoundResult[0],
-                                    buyButtonFoundResult[1],
-                                )
-
-                                QtCore.QThread.sleep(1)
-
-                                after_buy_screenshot = asarray(device.screenshot())
-                                buyButtonLocationAfter = aircv.find_template(
-                                    after_buy_screenshot, buyButton, 0.9, True
-                                )
-
-                                if not buyButtonLocationAfter:
-                                    break
-
-                                QtCore.QThread.sleep(1)
-
-                            if self.startMode == 1:
-                                self.expectNum -= 1
-                                self.emitLog.emit(f"剩餘次數: {self.expectNum}次")
-
-                            self.moneyNum = self.moneyNum - 184000
-                            covenantFoundTime += 1
-                            self.emitMoney.emit(str(self.moneyNum))
-
-                            break
-
-                        QtCore.QThread.sleep(1)
-
-                else:
-                    print("not find covenant!")
-
-                mysticLocation = aircv.find_template(screenshot, mystic, 0.9)
-                if mysticLocation and (not mysticFound):
-                    mysticFound = True
-
-                    print("find mystic!")
-                    self.emitLog.emit("找到神秘書籤")
-
-                    while True:
-                        mysticFoundResult: tuple = mysticLocation["result"]
-                        doubleClick(
-                            device,
-                            mysticFoundResult[0] + 800,
-                            mysticFoundResult[1] + 40,
-                        )
-
-                        QtCore.QThread.sleep(1)
-
-                        buy_screenshot = asarray(device.screenshot())
-                        buyButtonLocation = aircv.find_template(
-                            buy_screenshot, buyButton, 0.9
-                        )
-
-                        if buyButtonLocation:
-                            buyButtonFoundResult: tuple = buyButtonLocation["result"]
-
-                            while True:
-                                doubleClick(
-                                    device,
-                                    buyButtonFoundResult[0],
-                                    buyButtonFoundResult[1],
-                                )
-
-                                QtCore.QThread.sleep(1)
-
-                                after_buy_screenshot = asarray(device.screenshot())
-                                buyButtonLocationAfter = aircv.find_template(
-                                    after_buy_screenshot, buyButton, 0.9, True
-                                )
-
-                                if not buyButtonLocationAfter:
-                                    break
-
-                                QtCore.QThread.sleep(1)
-
-                            if self.startMode == 2:
-                                self.expectNum -= 1
-                                self.emitLog.emit(f"剩餘次數: {self.expectNum}次")
-
-                            self.moneyNum = self.moneyNum - 280000
-                            mysticFoundTime += 1
-                            self.emitMoney.emit(str(self.moneyNum))
-
-                            break
-
-                        QtCore.QThread.sleep(1)
-
-                else:
-                    print("not find mystic!")
-                    
-                if needRefresh:
-                    refreshButtonLocation = aircv.find_template(
-                        screenshot, refreshButton, 0.9
+                    # 商品列右側的購買鍵,相對書籤圖示偏移 (+800, +40)
+                    x, y = location["result"]
+                    self._clickThenConfirm(
+                        device, (x + 800, y + 40), buyButton, f"購買{name}書籤", rgb=True
                     )
-                    while True:
-                        refreshButtonFoundResult: tuple = refreshButtonLocation[
-                            "result"
-                        ]
-                        doubleClick(
-                            device,
-                            refreshButtonFoundResult[0],
-                            refreshButtonFoundResult[1],
-                        )
 
-                        QtCore.QThread.sleep(1)
+                    if self.startMode == mode:
+                        self.expectNum -= 1
+                        self.emitLog.emit(f"剩餘次數: {self.expectNum}次")
 
-                        confirm_screenshot = asarray(device.screenshot())
-                        refreshYesButtonLocation = aircv.find_template(
-                            confirm_screenshot, refreshYesButton, 0.9
-                        )
+                    self.moneyNum -= price
+                    if mode == 1:
+                        covenantFoundTime += 1
+                    else:
+                        mysticFoundTime += 1
+                    self.emitMoney.emit(str(self.moneyNum))
 
-                        if refreshYesButtonLocation:
-                            refreshYesButtonFoundResult: tuple = (
-                                refreshYesButtonLocation["result"]
-                            )
-
-                            while True:
-                                doubleClick(
-                                    device,
-                                    refreshYesButtonFoundResult[0],
-                                    refreshYesButtonFoundResult[1],
-                                )
-
-                                QtCore.QThread.sleep(1)
-
-                                after_click_yes_screenshot = asarray(
-                                    device.screenshot()
-                                )
-                                refreshYesButtonLocation = aircv.find_template(
-                                    after_click_yes_screenshot, refreshYesButton, 0.9
-                                )
-
-                                if not refreshYesButtonLocation:
-                                    break
-
-                                QtCore.QThread.sleep(1)
-
-                            self.stoneNum = self.stoneNum - 3
-                            self.emitStone.emit(str(self.stoneNum))
-
-                            refreshTime += 1
-
-                            if self.startMode == 3:
-                                self.expectNum -= 3
-                                self.emitLog.emit(f"剩餘次數: {int(self.expectNum/3)}次")
-
-                            needRefresh = False
-                            covenantFound = False
-                            mysticFound = False
-
-                            QtCore.QThread.sleep(1)
-
-                            break
-
-                        QtCore.QThread.sleep(1)
-
-                else:
+                if not needRefresh:
+                    # 第一次只往下滑,看完整個商店後才刷新
                     device.swipe(1400, 500, 1400, 200, 0.1)
                     needRefresh = True
 
-                    QtCore.QThread.sleep(1)
+                    self._sleep()
+                    continue
+
+                refreshLocation = self._find(screenshot, refreshButton)
+                for _ in range(MAX_RETRY):
+                    if refreshLocation:
+                        break
+                    self._sleep()
+                    refreshLocation = self._find(asarray(device.screenshot()), refreshButton)
+                if not refreshLocation:
+                    raise RuntimeError(f"找不到刷新按鈕(重試{MAX_RETRY}次)")
+
+                self._clickThenConfirm(
+                    device, refreshLocation["result"], refreshYesButton, "刷新商店"
+                )
+
+                self.stoneNum -= REFRESH_STONE_COST
+                self.emitStone.emit(str(self.stoneNum))
+
+                refreshTime += 1
+
+                if self.startMode == 3:
+                    self.expectNum -= REFRESH_STONE_COST
+                    self.emitLog.emit(f"剩餘次數: {int(self.expectNum/REFRESH_STONE_COST)}次")
+
+                needRefresh = False
+                bookmarkFound = {1: False, 2: False}
+
+                self._sleep()
 
             # finished report
             self.emitLog.emit("===== 結算 =====")
             self.emitLog.emit("共花費:")
-            self.emitLog.emit(f"天空石: {refreshTime*3}個")
-            self.emitLog.emit(f"金幣: {covenantFoundTime*184000+mysticFoundTime*280000}元")
+            self.emitLog.emit(f"天空石: {refreshTime*REFRESH_STONE_COST}個")
+            self.emitLog.emit(
+                f"金幣: {covenantFoundTime*COVENANT_PRICE+mysticFoundTime*MYSTIC_PRICE}元"
+            )
             self.emitLog.emit("獲得書籤:")
             self.emitLog.emit(f"聖約: {covenantFoundTime}次")
             self.emitLog.emit(f"神秘: {mysticFoundTime}次")
 
             self.isFinish.emit()
 
+        except StopRequested:
+            pass
+
         except Exception as e:
             print(e)
-            # self.emitLog.emit(str(e))
+            self.emitLog.emit(f"錯誤: {e}")
             self.isError.emit()
 
 
@@ -642,7 +567,9 @@ class Ui_Main(object):
             self.worker.setVariable(startMode, expectNum, moneyNum, stoneNum)
             self.worker.start()
         else:
-            self.worker.terminate()
+            self.worker.requestInterruption()
+            if not self.worker.wait(3000):
+                self.worker.terminate()
             self.logTextBrowser.append("===== 停止 =====")
             self.startProperty(False)
 
