@@ -19,6 +19,9 @@ adb_addr = config["adb_addr"]
 e7_language = config["e7_language"]
 default_gold = int(config.get("default_gold", 0))
 default_skystone = int(config.get("default_skystone", 0))
+default_covenant_count = int(config.get("default_covenant_count", 0))
+default_mystic_count = int(config.get("default_mystic_count", 0))
+default_stone_count = int(config.get("default_stone_count", 0))
 
 
 def pointOffset(point):
@@ -529,8 +532,8 @@ class Ui_Main(object):
     def retranslateUi(self, Main):
         _translate = QtCore.QCoreApplication.translate
         Main.setWindowTitle(_translate("Main", "第七史詩刷商店小工具"))
-        self.covenantInput.setText(_translate("Main", "0"))
-        self.mysticInput.setText(_translate("Main", "0"))
+        self.covenantInput.setText(_translate("Main", str(default_covenant_count)))
+        self.mysticInput.setText(_translate("Main", str(default_mystic_count)))
         self.moneyTextShowLabel.setText(_translate("Main", "金幣"))
         self.moneyTotalShowEdit.setText(_translate("Main", str(default_gold)))
         self.stoneTextShowLabel.setText(_translate("Main", "天空石"))
@@ -549,7 +552,7 @@ class Ui_Main(object):
             )
         )
         self.stoneTimeLabel.setText(_translate("Main", "個"))
-        self.stoneInput.setText(_translate("Main", "0"))
+        self.stoneInput.setText(_translate("Main", str(default_stone_count)))
         self.covenantRadioButton.setText(_translate("Main", "聖約書籤"))
         self.mysticRadioButton.setText(_translate("Main", "神秘書籤"))
         self.stoneRadioButton.setText(_translate("Main", "天空石"))

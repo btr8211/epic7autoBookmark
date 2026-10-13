@@ -21,7 +21,8 @@ ii. 推薦：只勾高級設定
 ![預覽](https://i.imgur.com/2sAobaw.png)  
 i. adb_addr填adb路徑  
 ii. e7_language填e7裡的語系(繁中: zh-TW, 簡中: zh-CN, 英文: en-US)  
-iii. default_gold / default_skystone為啟動時預設填入的金幣與天空石數量(可不改，啟動後也能在介面手動修改)
+iii. default_gold / default_skystone為啟動時預設填入的金幣與天空石數量(可不改，啟動後也能在介面手動修改)  
+iv. default_covenant_count / default_mystic_count / default_stone_count為聖約書籤次數、神秘書籤次數、天空石使用數量的預設值
   
 ## 二、使用方式
 先將bluestack和第七史詩的設定調整的如上方環境相同。  
